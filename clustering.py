@@ -58,9 +58,25 @@ class Clusters:
         logging.info(f"Vectorizing using {embeddings['model']}")
 
         if embeddings["model"].lower() == "tfidf":
+            name = "vectros.png"
             vectorizer = TfidfVectorizer(**embeddings['config'])
             start_time = time()            
             X = vectorizer.fit_transform(documents)
+
+        elif embeddings["model"] == "all-MiniLM-L6-v2":
+            name = "embeddings.png"
+            embed_model = SentenceTransformer(
+                "all-MiniLM-L6-v2", device=embeddings["config"]["embed_device"]
+            )
+            start_time = time() 
+            X = embed_model.encode(
+                documents,
+                batch_size=embeddings["config"]["embed_batch_size"],
+                show_progress_bar=True,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+
 
         logging.info(f"vectorization done in {time() - start_time:.3f} s")
         logging.info(f"Size: {X.shape[0]}, n_features: {X.shape[1]}")
@@ -77,7 +93,7 @@ class Clusters:
             # import pdb; pdb.set_trace()
             fig = go.Figure(data=go.Heatmap(z=x))
             # fig = px.imshow(, color_continuous_scale='RdBu_r', origin='lower')
-            fig.write_image("images/embeddings.png")
+            fig.write_image(f"images/{name}")
 
         return X
 
@@ -104,7 +120,7 @@ class Clusters:
                 fig.write_image("images/svd_embeddings.png")
 
             return X_lsa
-        
+    
         
 
     def do_cluster(self, model, X, clustering, labels, evaluations, evaluations_std):
@@ -192,7 +208,10 @@ class Clusters:
             return self.cluster(self.X, self.clustering, labels, evaluations, evaluations_std)
         
 
-def demo_20newsgroups():    
+def demo_20newsgroups():
+    shutil.rmtree("images", ignore_errors=True)
+    os.makedirs("images", exist_ok=True) 
+
     from clustering import Clusters
     import utils
 
@@ -546,8 +565,15 @@ def demo_20newsgroups():
     plt.savefig("images/comparision.png")
 
 
+    shutil.copytree("images", "images_20newsgroups", dirs_exist_ok=True)
 
-def demo_kaggle():    
+    return evaluations, evaluations_std
+
+def demo_kaggle():  
+    
+    shutil.rmtree("images", ignore_errors=True)
+    os.makedirs("images", exist_ok=True) 
+
     from clustering import Clusters
     import utils
 
@@ -869,9 +895,14 @@ def demo_kaggle():
 
     plt.savefig("images/comparision.png")    
 
+    shutil.copytree("images", "images_kaggle", dirs_exist_ok=True)
 
+    return evaluations, evaluations_std
 
 def demo_quora():
+    shutil.rmtree("images", ignore_errors=True)
+    os.makedirs("images", exist_ok=True) 
+
     from clustering import Clusters
     import utils
 
@@ -1212,14 +1243,208 @@ def demo_quora():
 
     plt.savefig("images/comparision.png")   
 
-if __name__ == "__main__":    
-    os.makedirs("images", exist_ok=True) 
-
-    demo_20newsgroups()
-    shutil.copytree("images", "images_20newsgroups", dirs_exist_ok=True)
-
-    demo_kaggle()
-    shutil.copytree("images", "images_kaggle", dirs_exist_ok=True)
-
-    demo_quora()
     shutil.copytree("images", "images_quora", dirs_exist_ok=True)
+
+    return evaluations, evaluations_std
+
+def demo_kaggle_embeddings():    
+    shutil.rmtree("images", ignore_errors=True)
+    os.makedirs("images", exist_ok=True) 
+    from clustering import Clusters
+    import utils
+
+    evaluations = []
+    evaluations_std = []
+
+    data = utils.load_kaggle_data()
+    df = data.groupby(['label']).apply('count').reset_index()
+
+    fig = px.bar(df, x="label", y="document", title="Kaggle Dataset")
+    fig.write_image(f"images/data.png")
+    
+    logging.info(data['document'].head())
+    logging.info(f"Shape: {data.shape}")
+    n_clusters = 5
+
+
+    clusters = Clusters(        
+        embeddings={
+            "model":  "all-MiniLM-L6-v2",
+            "config": {
+                "embed_device":"cuda",
+                "embed_batch_size":64,
+                "embed_max_seq_length":512,
+                },
+            },    
+        dim_reduction=None,
+        clustering=None,
+    )
+
+    clusters.fit(data['document'].to_list())
+
+
+    # 6. Putting it all together 
+
+    evaluations = []
+    evaluations_std = []
+
+    Clusters(
+        exp_name = "KMeans with TfidfVectorizer",
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+        dim_reduction=None,
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+    Clusters(       
+        exp_name = "KMeans with SVD", 
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+            dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+    Clusters(       
+        exp_name = "KMeans with Embeddings", 
+    embeddings={
+        "model":  "all-MiniLM-L6-v2",
+            "config": {
+                "embed_device":"cuda",
+                "embed_batch_size":64,
+                "embed_max_seq_length":512,
+                },
+        },
+             dim_reduction=None,             
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+
+    Clusters(       
+        exp_name = "KMeans with Embeddings and SVD", 
+    embeddings={
+        "model":  "all-MiniLM-L6-v2",
+            "config": {
+                "embed_device":"cuda",
+                "embed_batch_size":64,
+                "embed_max_seq_length":512,
+                },
+        },
+             dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },       
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+    # Plots
+
+
+
+    fig, (ax0, ax1) = plt.subplots(ncols=2, figsize=(16, 6), sharey=True)
+
+
+    df = pd.DataFrame(evaluations[::-1]).set_index("estimator")
+    df_std = pd.DataFrame(evaluations_std[::-1]).set_index("estimator")
+
+
+    df.drop(
+        ["train_time"],
+        axis="columns",
+    ).plot.barh(ax=ax0, xerr=df_std,colormap='Paired')
+    ax0.set_xlabel("Clustering scores")
+    ax0.set_ylabel("")
+    ax0.grid()
+
+    df["train_time"].plot.barh(ax=ax1, xerr=df_std["train_time"],colormap='Paired')
+    ax1.set_xlabel("Clustering time (s)")
+    ax1.grid()
+    
+    plt.tight_layout()
+    plt.savefig("images/comparision.png")    
+
+    shutil.copytree("images", "images_kaggle_embeddings", dirs_exist_ok=True)
+
+    return evaluations, evaluations_std
+
+if __name__ == "__main__":    
+    ds1_evaluations, ds1_evaluations_std = demo_20newsgroups()    
+    ds2_evaluations, ds2_evaluations_std = demo_kaggle()        
+    ds3_evaluations, ds3_evaluations_std = demo_quora()
+    ds4_evaluations, ds4_evaluations_std = demo_kaggle_embeddings()
+
+
+
