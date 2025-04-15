@@ -31,7 +31,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import Normalizer
 from sklearn.cluster import MiniBatchKMeans
 from sklearn import metrics
-
+from sklearn.cluster import DBSCAN, HDBSCAN, AgglomerativeClustering
+from sklearn.neighbors import kneighbors_graph
 
 logging.basicConfig(level=logging.INFO)
 
@@ -105,31 +106,35 @@ class Clusters:
         
         
 
-    def cluster_kmeans(self, kmeans, X, clustering, labels, evaluations, evaluations_std):
+    def do_cluster(self, model, X, clustering, labels, evaluations, evaluations_std):
+        model_name = model.__class__.__name__
         name = self.exp_name
 
         logging.info(f"Clustering using {clustering['model']}")
        
         if not clustering.get("evaluate", False):
-            kmeans.fit(X)
-            cluster_ids, cluster_sizes = np.unique(kmeans.labels_, return_counts=True)
-            return kmeans, cluster_ids, cluster_sizes
+            model.fit(X)
+            cluster_ids, cluster_sizes = np.unique(model.labels_, return_counts=True)
+            return model, cluster_ids, cluster_sizes
         else:
             train_times = []
             scores = defaultdict(list)
-            for seed in range(5):
-                kmeans.set_params(random_state=seed)        
+            n = 1 if model_name in ["HDBSCAN", "DBSCAN", "AgglomerativeClustering"] else 5
+            for seed in range(n):
+                if not model_name in ["HDBSCAN", "DBSCAN", "AgglomerativeClustering"]:
+                    model.set_params(random_state=seed)        
+
                 start_time = time()
-                kmeans.fit(X)
+                model.fit(X)
                 train_times.append(time() - start_time)
-                scores["Homogeneity"].append(metrics.homogeneity_score(labels, kmeans.labels_))
-                scores["Completeness"].append(metrics.completeness_score(labels, kmeans.labels_))
-                scores["V-measure"].append(metrics.v_measure_score(labels, kmeans.labels_))
+                scores["Homogeneity"].append(metrics.homogeneity_score(labels, model.labels_))
+                scores["Completeness"].append(metrics.completeness_score(labels, model.labels_))
+                scores["V-measure"].append(metrics.v_measure_score(labels, model.labels_))
                 scores["Adjusted Rand-Index"].append(
-                metrics.adjusted_rand_score(labels, kmeans.labels_)
+                metrics.adjusted_rand_score(labels, model.labels_)
             )
             scores["Silhouette Coefficient"].append(
-                metrics.silhouette_score(X, kmeans.labels_, sample_size=2000)
+                metrics.silhouette_score(X, model.labels_, sample_size=2000)
             )
             train_times = np.asarray(train_times)
 
@@ -147,17 +152,31 @@ class Clusters:
                 mean_score, std_score = np.mean(score_values), np.std(score_values)
                 logging.info(f"{score_name}: {mean_score:.3f} ± {std_score:.3f}") 
                 evaluation[score_name] = mean_score
-                evaluation_std[score_name] = std_score               
+                evaluation_std[score_name] = std_score     
+
             evaluations.append(evaluation)
             evaluations_std.append(evaluation_std)
 
     def cluster(self, X, clustering, labels=None, evaluations:list|None=None, evaluations_std:list|None=None):
         if clustering["model"].lower() == "kmeans":
             kmeans = KMeans(**clustering['config'])
-            return self.cluster_kmeans(kmeans, X, clustering,labels,evaluations, evaluations_std)            
+            return self.do_cluster(kmeans, X, clustering,labels,evaluations, evaluations_std)            
         elif clustering["model"].lower() == "minibatchkmeans":
             kmeans = MiniBatchKMeans(**clustering['config'])
-            return self.cluster_kmeans(kmeans, X, clustering,labels,evaluations, evaluations_std)            
+            return self.do_cluster(kmeans, X, clustering,labels,evaluations, evaluations_std)
+        elif clustering["model"].lower() == "hdbscan":
+            hdbscan = HDBSCAN(**clustering['config'])
+            return self.do_cluster(hdbscan, X, clustering,labels,evaluations, evaluations_std)
+        elif clustering["model"].lower() == "dbscan":
+            dbscan = DBSCAN(**clustering['config'])
+            return self.do_cluster(dbscan, X, clustering,labels,evaluations, evaluations_std)
+        elif clustering["model"].lower() == "agglomerative":
+            connectivity = kneighbors_graph(X, n_neighbors=2, include_self=False)            
+            # make connectivity symmetric
+            connectivity = 0.5 * (connectivity + connectivity.T)
+            clustering['config']['connectivity'] = connectivity
+            average_linkage = AgglomerativeClustering(**clustering['config'])
+            return self.do_cluster(average_linkage, X, clustering,labels,evaluations, evaluations_std)
 
     def fit(self, documents:list[str], labels:list[int]|None=None, 
             evaluations:list|None=None, evaluations_std:list|None=None):
@@ -171,7 +190,7 @@ class Clusters:
             return self.cluster(self.X, self.clustering, labels, evaluations, evaluations_std)
         
 
-def demo_20newsgroups():
+def demo_20newsgroups_kmeans():
     from clustering import Clusters
     import utils
 
@@ -182,7 +201,7 @@ def demo_20newsgroups():
     df = data.groupby(['label']).apply('count').reset_index()
 
     fig = px.bar(df, x="label", y="document", title="20 NewsGroups Dataset")
-    fig.write_image("images/fig1.png")
+    fig.write_image("images/dataset.png")
     
     logging.info(data['document'].head())
 
@@ -208,7 +227,7 @@ def demo_20newsgroups():
     #     _, cluster_ids, cluster_sizes = clusters.cluster(clusters.X, clustering={
     #         "model": "KMeans",
     #         "config" : {
-    #             "n_clusters":20,
+    #             "n_clusters":n_clusters,
     #             "max_iter":100,
     #             "n_init":1,
     #             "random_state":i,
@@ -238,7 +257,7 @@ def demo_20newsgroups():
     #     clustering={
     #         "model": "KMeans",
     #         "config" : {
-    #             "n_clusters":20,
+    #             "n_clusters":n_clusters,
     #             "max_iter":100,
     #             "n_init":1,
     #         },
@@ -291,7 +310,7 @@ def demo_20newsgroups():
     #     clustering={
     #         "model": "KMeans",
     #         "config" : {
-    #             "n_clusters":20,
+    #             "n_clusters":n_clusters,
     #             "max_iter":100,
     #             "n_init":1,
     #         },
@@ -319,7 +338,7 @@ def demo_20newsgroups():
         clustering={
             "model": "KMeans",
             "config" : {
-                "n_clusters":20,
+                "n_clusters":n_clusters,
                 "max_iter":100,
                 "n_init":1,
             },
@@ -351,7 +370,7 @@ def demo_20newsgroups():
         clustering={
             "model": "KMeans",
             "config" : {
-                "n_clusters":20,
+                "n_clusters":n_clusters,
                 "max_iter":100,
                 "n_init":1,
             },
@@ -385,7 +404,7 @@ def demo_20newsgroups():
         clustering={
             "model": "MiniBatchKMeans",
             "config" : {
-                "n_clusters":20,
+                "n_clusters":n_clusters,
                 "init_size":1000,
                 "batch_size":1000,
                 "n_init":1,
@@ -420,5 +439,681 @@ def demo_20newsgroups():
 
     plt.savefig("images/comparision.png")
 
+
+def demo_20newsgroups():
+    from clustering import Clusters
+    import utils
+
+    evaluations = []
+    evaluations_std = []
+
+    data = utils.load_20newsgroups()
+    df = data.groupby(['label']).apply('count').reset_index()
+
+    fig = px.bar(df, x="label", y="document", title="20 NewsGroups Dataset")
+    fig.write_image("images/fig1.png")
+    
+    logging.info(data['document'].head())
+    n_clusters = 20
+    
+    # 1. With out cleaning and Without Dim reductions
+
+    clusters = Clusters(        
+        embeddings={
+            "model":  "tfidf",
+            "config": {
+                "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+                "min_df":5, # ignoring terms that appear in less than 5 documents
+                "stop_words":"english",
+                },
+            },
+        dim_reduction=None,
+        clustering=None,
+        )
+    
+    clusters.fit(data['document'].to_list())
+    
+    # 2. Kmeans depends on the cluster centroids initialize  
+    for i in range(5):
+        _, cluster_ids, cluster_sizes = clusters.cluster(clusters.X, clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+                "random_state":i,
+            }})         
+        logging.info(f"Cluster Sizes: {cluster_sizes}")
+
+    _, category_sizes = np.unique(data['label'], return_counts=True)
+    logging.info(f"True Cluster Sizes: {category_sizes}")
+
+    # How to choose best initilization >    
+    # Homogeneity: 0.349 ± 0.010
+    # Completeness: 0.398 ± 0.009
+    # V-measure: 0.372 ± 0.009
+    # Silhouette Coefficient: 0.007 ± 0.000
+
+    # 3. fit and eval
+    clusters = Clusters(        
+        embeddings={
+            "model":  "tfidf",
+            "config": {
+                "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+                "min_df":5, # ignoring terms that appear in less than 5 documents
+                "stop_words":"english",
+                },
+            },
+        dim_reduction=None,
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    )
+
+    clusters.fit(data['document'].to_list(), data['label'].to_list(),evaluations,evaluations_std)
+
+
+    # 4. Dim reduction using SVD
+
+    clusters = Clusters(        
+        embeddings={
+            "model":  "tfidf",
+            "config": {
+                "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+                "min_df":5, # ignoring terms that appear in less than 5 documents
+                "stop_words":"english",
+                },
+            },
+        dim_reduction={
+            "model": "svd",
+            "config" : {
+                "n_components":100
+                },
+        },
+        clustering=None,
+    )
+
+    clusters.fit(data['document'].to_list())
+
+
+    # 5. Putting it all together with kmeans
+    clusters = Clusters(        
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    )
+
+    clusters.fit(data['document'].to_list(), data['label'].to_list(),evaluations,evaluations_std)
+
+
+
+
+    # 6. Putting it all together 
+
+    evaluations = []
+    evaluations_std = []
+
+    Clusters(
+        exp_name = "KMeans with TfidfVectorizer",
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+        dim_reduction=None,
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+    Clusters(       
+        exp_name = "KMeans with SVD", 
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+            dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+
+    Clusters(   
+        exp_name = "MiniBatchKMeans with SVD",      
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "MiniBatchKMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "init_size":1000,
+                "batch_size":1000,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+    Clusters(   
+        exp_name = "DBSCAN with SVD",      
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "dbscan", #"hdbscan",
+            "config" : {
+                "eps":0.3,
+                "min_samples":25,                
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+    # Clusters(   
+    #     exp_name = "HDBSCAN with SVD",      
+    # embeddings={
+    #     "model":  "tfidf",
+    #     "config": {
+    #         "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+    #         "min_df":5, # ignoring terms that appear in less than 5 documents
+    #         "stop_words":"english",
+    #         },
+    #     },
+    # dim_reduction={
+    #     "model": "svd",
+    #     "config" : {
+    #         "n_components":100
+    #         },
+    # },
+    #     clustering={
+    #         "model": "hdbscan",
+    #         "config" : {                
+    #             "min_samples":25,                
+    #         },
+    #         "evaluate": True,
+    #     }
+    # ).fit(
+    #     data['document'].to_list(),
+    #     data['label'].to_list(),
+    #     evaluations,
+    #     evaluations_std
+    #     )
+
+    Clusters(   
+        exp_name = "Agglomerative with SVD",      
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "agglomerative",
+            "config" : {                
+                "linkage":"ward",
+                "metric":"euclidean",
+                "n_clusters":n_clusters,              
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+    # Plots
+
+
+
+    fig, (ax0, ax1) = plt.subplots(ncols=2, figsize=(16, 6), sharey=True)
+
+
+    df = pd.DataFrame(evaluations[::-1]).set_index("estimator")
+    df_std = pd.DataFrame(evaluations_std[::-1]).set_index("estimator")
+
+
+    df.drop(
+        ["train_time"],
+        axis="columns",
+    ).plot.barh(ax=ax0, xerr=df_std,colormap='Paired')
+    ax0.set_xlabel("Clustering scores")
+    ax0.set_ylabel("")
+
+    df["train_time"].plot.barh(ax=ax1, xerr=df_std["train_time"],colormap='Paired')
+    ax1.set_xlabel("Clustering time (s)")
+    plt.tight_layout()
+
+    plt.savefig("images/comparision.png")
+
+
+
+def demo_kaggle():
+    from clustering import Clusters
+    import utils
+
+    evaluations = []
+    evaluations_std = []
+
+    data = utils.load_kaggle_data()
+    df = data.groupby(['label']).apply('count').reset_index()
+
+    fig = px.bar(df, x="label", y="document", title="20 NewsGroups Dataset")
+    fig.write_image("images/fig1.png")
+    
+    logging.info(data['document'].head())
+    n_clusters = 5
+
+    # 1. With out cleaning and Without Dim reductions
+
+    clusters = Clusters(        
+        embeddings={
+            "model":  "tfidf",
+            "config": {
+                "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+                "min_df":5, # ignoring terms that appear in less than 5 documents
+                "stop_words":"english",
+                },
+            },
+        dim_reduction=None,
+        clustering=None,
+        )
+    
+    clusters.fit(data['document'].to_list())
+    
+    # 2. Kmeans depends on the cluster centroids initialize  
+    for i in range(5):
+        _, cluster_ids, cluster_sizes = clusters.cluster(clusters.X, clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+                "random_state":i,
+            }})         
+        logging.info(f"Cluster Sizes: {cluster_sizes}")
+
+    _, category_sizes = np.unique(data['label'], return_counts=True)
+    logging.info(f"True Cluster Sizes: {category_sizes}")
+
+    # How to choose best initilization >    
+    # Homogeneity: 0.349 ± 0.010
+    # Completeness: 0.398 ± 0.009
+    # V-measure: 0.372 ± 0.009
+    # Silhouette Coefficient: 0.007 ± 0.000
+
+    # 3. fit and eval
+    clusters = Clusters(        
+        embeddings={
+            "model":  "tfidf",
+            "config": {
+                "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+                "min_df":5, # ignoring terms that appear in less than 5 documents
+                "stop_words":"english",
+                },
+            },
+        dim_reduction=None,
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    )
+
+    clusters.fit(data['document'].to_list(), data['label'].to_list(),evaluations,evaluations_std)
+
+
+    # 4. Dim reduction using SVD
+
+    clusters = Clusters(        
+        embeddings={
+            "model":  "tfidf",
+            "config": {
+                "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+                "min_df":5, # ignoring terms that appear in less than 5 documents
+                "stop_words":"english",
+                },
+            },
+        dim_reduction={
+            "model": "svd",
+            "config" : {
+                "n_components":100
+                },
+        },
+        clustering=None,
+    )
+
+    clusters.fit(data['document'].to_list())
+
+
+    # 5. Putting it all together with kmeans
+    clusters = Clusters(        
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    )
+
+    clusters.fit(data['document'].to_list(), data['label'].to_list(),evaluations,evaluations_std)
+
+
+
+
+    # 6. Putting it all together 
+
+    evaluations = []
+    evaluations_std = []
+
+    Clusters(
+        exp_name = "KMeans with TfidfVectorizer",
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+        dim_reduction=None,
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+    Clusters(       
+        exp_name = "KMeans with SVD", 
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+            dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "KMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "max_iter":100,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+
+    Clusters(   
+        exp_name = "MiniBatchKMeans with SVD",      
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "MiniBatchKMeans",
+            "config" : {
+                "n_clusters":n_clusters,
+                "init_size":1000,
+                "batch_size":1000,
+                "n_init":1,
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+
+    Clusters(   
+        exp_name = "DBSCAN with SVD",      
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "dbscan",
+            "config" : {
+                "eps":0.3,
+                "min_samples":5,                
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+    Clusters(   
+        exp_name = "Agglomerative with SVD",      
+    embeddings={
+        "model":  "tfidf",
+        "config": {
+            "max_df":0.5,   # ignoring terms that appear in more than 50% of the documents 
+            "min_df":5, # ignoring terms that appear in less than 5 documents
+            "stop_words":"english",
+            },
+        },
+    dim_reduction={
+        "model": "svd",
+        "config" : {
+            "n_components":100
+            },
+    },
+        clustering={
+            "model": "agglomerative",
+            "config" : {                
+                "linkage":"ward",
+                "metric":"euclidean",
+                "n_clusters":n_clusters,              
+            },
+            "evaluate": True,
+        }
+    ).fit(
+        data['document'].to_list(),
+        data['label'].to_list(),
+        evaluations,
+        evaluations_std
+        )
+
+    # Plots
+
+
+
+    fig, (ax0, ax1) = plt.subplots(ncols=2, figsize=(16, 6), sharey=True)
+
+
+    df = pd.DataFrame(evaluations[::-1]).set_index("estimator")
+    df_std = pd.DataFrame(evaluations_std[::-1]).set_index("estimator")
+
+
+    df.drop(
+        ["train_time"],
+        axis="columns",
+    ).plot.barh(ax=ax0, xerr=df_std,colormap='Paired')
+    ax0.set_xlabel("Clustering scores")
+    ax0.set_ylabel("")
+
+    df["train_time"].plot.barh(ax=ax1, xerr=df_std["train_time"],colormap='Paired')
+    ax1.set_xlabel("Clustering time (s)")
+    plt.tight_layout()
+
+    plt.savefig("images/comparision.png")    
+
 if __name__ == "__main__":
-    demo_20newsgroups()
+    demo_kaggle()
