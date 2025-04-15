@@ -17,3 +17,12 @@ def load_20newsgroups(categories:list|None=None, clean:bool=False, limit_to:int=
     })
 
     return df
+
+
+def load_kaggle_data(categories:list|None=None, clean:bool=False, limit_to:int=1000, random_state:int=3):
+    df = pd.read_csv("data/df_file.csv")    
+    df = df.rename(columns={
+        "Text": "document",
+        "Label": "label"
+    })
+    return df
